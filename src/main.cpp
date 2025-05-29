@@ -219,16 +219,66 @@ void setup() {
     // Boot decision logic
     if (init_meta.active_slot == 0 && init_meta.valid_a) {
         Serial.println("Jumping to application in slot A");
-        jump_to_app(SLOT_A_ADDRESS);
+        // Print vector table for diagnostics
+        Serial.println("Slot A vector table (first 32 bytes):");
+        for (int i = 0; i < 8; i++) {
+            uint32_t word = *((uint32_t*)(SLOT_A_ADDRESS + i * 4));
+            Serial.print("0x"); Serial.print(word, HEX); Serial.print(" ");
+        }
+        Serial.println();
+        // Check vector table validity
+        uint32_t sp = *((uint32_t*)SLOT_A_ADDRESS);
+        uint32_t rv = *((uint32_t*)(SLOT_A_ADDRESS + 4));
+        if ((sp & 0x60000000) != 0x60000000 || (rv & 0x60000000) != 0x60000000) {
+            Serial.println("WARNING: Slot A does not appear to contain a valid ARM Cortex-M7 binary. Aborting jump.");
+        } else {
+            jump_to_app(SLOT_A_ADDRESS);
+        }
     } else if (init_meta.active_slot == 1 && init_meta.valid_b) {
         Serial.println("Jumping to application in slot B");
-        jump_to_app(SLOT_B_ADDRESS);
+        Serial.println("Slot B vector table (first 32 bytes):");
+        for (int i = 0; i < 8; i++) {
+            uint32_t word = *((uint32_t*)(SLOT_B_ADDRESS + i * 4));
+            Serial.print("0x"); Serial.print(word, HEX); Serial.print(" ");
+        }
+        Serial.println();
+        uint32_t sp = *((uint32_t*)SLOT_B_ADDRESS);
+        uint32_t rv = *((uint32_t*)(SLOT_B_ADDRESS + 4));
+        if ((sp & 0x60000000) != 0x60000000 || (rv & 0x60000000) != 0x60000000) {
+            Serial.println("WARNING: Slot B does not appear to contain a valid ARM Cortex-M7 binary. Aborting jump.");
+        } else {
+            jump_to_app(SLOT_B_ADDRESS);
+        }
     } else if (init_meta.valid_a) {
         Serial.println("Active slot invalid, but slot A is valid. Jumping to slot A.");
-        jump_to_app(SLOT_A_ADDRESS);
+        Serial.println("Slot A vector table (first 32 bytes):");
+        for (int i = 0; i < 8; i++) {
+            uint32_t word = *((uint32_t*)(SLOT_A_ADDRESS + i * 4));
+            Serial.print("0x"); Serial.print(word, HEX); Serial.print(" ");
+        }
+        Serial.println();
+        uint32_t sp = *((uint32_t*)SLOT_A_ADDRESS);
+        uint32_t rv = *((uint32_t*)(SLOT_A_ADDRESS + 4));
+        if ((sp & 0x60000000) != 0x60000000 || (rv & 0x60000000) != 0x60000000) {
+            Serial.println("WARNING: Slot A does not appear to contain a valid ARM Cortex-M7 binary. Aborting jump.");
+        } else {
+            jump_to_app(SLOT_A_ADDRESS);
+        }
     } else if (init_meta.valid_b) {
         Serial.println("Active slot invalid, but slot B is valid. Jumping to slot B.");
-        jump_to_app(SLOT_B_ADDRESS);
+        Serial.println("Slot B vector table (first 32 bytes):");
+        for (int i = 0; i < 8; i++) {
+            uint32_t word = *((uint32_t*)(SLOT_B_ADDRESS + i * 4));
+            Serial.print("0x"); Serial.print(word, HEX); Serial.print(" ");
+        }
+        Serial.println();
+        uint32_t sp = *((uint32_t*)SLOT_B_ADDRESS);
+        uint32_t rv = *((uint32_t*)(SLOT_B_ADDRESS + 4));
+        if ((sp & 0x60000000) != 0x60000000 || (rv & 0x60000000) != 0x60000000) {
+            Serial.println("WARNING: Slot B does not appear to contain a valid ARM Cortex-M7 binary. Aborting jump.");
+        } else {
+            jump_to_app(SLOT_B_ADDRESS);
+        }
     } else {
         Serial.println("No valid application found. Entering recovery mode.");
         // Initialize Ethernet for recovery
@@ -247,82 +297,182 @@ void setup() {
             if (client) {
                 Serial.println("Client connected in recovery mode");
                 String request = "";
-                unsigned long timeout = millis() + 1000;
-                while (client.connected() && millis() < timeout) {
-                    while (client.available()) {
-                        char c = client.read();
-                        request += c;
-                        timeout = millis() + 1000;
-                    }
+                unsigned long start_time = millis();
+                // Read the first line (request line)
+                while (client.connected() && client.available() == 0 && millis() - start_time < 1000) {
+                    delay(1);
                 }
-                // Check for file upload POST
-                if (request.indexOf("POST /upload") >= 0) {
-                    int bodyStart = request.indexOf("\r\n\r\n");
-                    if (bodyStart > 0) {
-                        String code = request.substring(bodyStart + 4);
-                        Serial.println("--- Received uploaded code ---");
-                        Serial.println(code);
-                        Serial.println("-----------------------------");
-                        // Write to non-primary partition (slot B if active is A, else slot A)
-                        uint32_t target_addr = (init_meta.active_slot == 0) ? SLOT_B_ADDRESS : SLOT_A_ADDRESS;
-                        Serial.print("Writing uploaded code to partition at address 0x");
-                        Serial.println(target_addr, HEX);
-                        // Simulate writing code as binary to the partition (in real use, would parse and flash binary)
-                        flash_erase_sector(target_addr);
-                        flash_write(target_addr, code.c_str(), code.length());
-                        Serial.println("Code written to flash partition.");
-                        // Update metadata: set new slot as valid and active, invalidate the other
-                        if (init_meta.active_slot == 0) {
-                            init_meta.valid_b = 1;
-                            init_meta.active_slot = 1;
-                            init_meta.valid_a = 0; // Optionally invalidate A
-                        } else {
-                            init_meta.valid_a = 1;
-                            init_meta.active_slot = 0;
-                            init_meta.valid_b = 0; // Optionally invalidate B
+                // Read the request line
+                String req_line = "";
+                while (client.connected() && client.available()) {
+                    char c = client.read();
+                    if (c == '\n') break;
+                    if (c != '\r') req_line += c;
+                }
+                Serial.print("HTTP request line: ");
+                Serial.println(req_line);
+                // Only buffer and process upload for POST /upload
+                if (req_line.startsWith("POST /upload")) {
+                    // Read headers until blank line
+                    String headers = "";
+                    int content_length = 0;
+                    while (client.connected()) {
+                        String line = "";
+                        while (client.available()) {
+                            char c = client.read();
+                            if (c == '\n') break;
+                            if (c != '\r') line += c;
                         }
-                        save_metadata(init_meta);
-                        Serial.println("Metadata updated. Rebooting to new application...");
-                        // Respond to client
-                        client.println("HTTP/1.1 200 OK");
+                        if (line.length() == 0) break; // End of headers
+                        headers += line + "\n";
+                        if (line.startsWith("Content-Length:")) {
+                            content_length = line.substring(15).toInt();
+                        }
+                    }
+                    Serial.print("Content-Length: "); Serial.println(content_length);
+                    // Now read the body (uploaded file)
+                    size_t upload_bytes = 0;
+                    bool upload_too_large = false;
+                    const size_t MAX_UPLOAD_SIZE = 1024 * 1024; // 1MB
+                    unsigned long timeout = millis() + 10000;
+                    String code = "";
+                    while (client.connected() && upload_bytes < content_length && millis() < timeout) {
+                        while (client.available() && upload_bytes < content_length) {
+                            char c = client.read();
+                            code += c;
+                            upload_bytes++;
+                            if (upload_bytes % 1024 == 0) {
+                                Serial.print("Upload progress: ");
+                                Serial.print(upload_bytes);
+                                Serial.println(" bytes received");
+                            }
+                            if (upload_bytes > MAX_UPLOAD_SIZE) {
+                                Serial.println("ERROR: Uploaded file exceeds 1MB. Aborting upload.");
+                                upload_too_large = true;
+                                break;
+                            }
+                            timeout = millis() + 10000;
+                        }
+                        if (upload_too_large) break;
+                    }
+                    if (upload_too_large) {
+                        client.println("HTTP/1.1 413 Payload Too Large");
                         client.println("Content-Type: text/plain");
                         client.println("Connection: close");
                         client.println();
-                        client.println("Upload received. Code written to partition. Rebooting...");
+                        client.println("ERROR: Uploaded file exceeds 1MB. Aborting upload.");
                         client.stop();
-                        delay(100);
-                        SCB_AIRCR = 0x05FA0004; // Request system reset (ARM Cortex-M7)
-                        while (1); // Wait for reset
+                        continue;
                     }
-                }
-                // Serve upload form for GET /
-                if (request.startsWith("GET / ") || request.startsWith("GET /HTTP")) {
+                    if (upload_bytes == 0) {
+                        Serial.println("No data received from client.");
+                    }
+                    if (millis() >= timeout) {
+                        Serial.println("ERROR: Upload timed out (no data for 10s). Aborting.");
+                        client.println("HTTP/1.1 408 Request Timeout");
+                        client.println("Content-Type: text/plain");
+                        client.println("Connection: close");
+                        client.println();
+                        client.println("ERROR: Upload timed out (no data for 10s). Aborting.");
+                        client.stop();
+                        continue;
+                    }
+                    Serial.println("--- Received uploaded code ---");
+                    Serial.println(code);
+                    Serial.println("-----------------------------");
+                    // Write to non-primary partition (slot B if active is A, else slot A)
+                    uint32_t target_addr = (init_meta.active_slot == 0) ? SLOT_B_ADDRESS : SLOT_A_ADDRESS;
+                    // Parse multipart/form-data to extract the binary payload
+                    int bin_start = -1, bin_end = -1;
+                    // Find the start of the binary (after the first double CRLF after Content-Type)
+                    int content_type_idx = code.indexOf("Content-Type:");
+                    if (content_type_idx >= 0) {
+                        int bin_hdr_end = code.indexOf("\r\n\r\n", content_type_idx);
+                        if (bin_hdr_end >= 0) {
+                            bin_start = bin_hdr_end + 4;
+                            // Find the boundary at the end
+                            String boundary = code.substring(0, code.indexOf("\r\n"));
+                            bin_end = code.indexOf(boundary, bin_start) - 4; // -4 to remove trailing CRLF
+                        }
+                    }
+                    if (bin_start >= 0 && bin_end > bin_start) {
+                        Serial.print("Extracted binary payload: start=");
+                        Serial.print(bin_start);
+                        Serial.print(", end=");
+                        Serial.println(bin_end);
+                        int bin_len = bin_end - bin_start;
+                        // Write only the binary payload to flash
+                        flash_erase_sector(target_addr);
+                        flash_write(target_addr, code.c_str() + bin_start, bin_len);
+                        Serial.print("Wrote "); Serial.print(bin_len); Serial.println(" bytes of firmware to flash partition.");
+                    } else {
+                        Serial.println("ERROR: Could not parse firmware binary from multipart upload. Aborting.");
+                        client.println("HTTP/1.1 400 Bad Request");
+                        client.println("Content-Type: text/plain");
+                        client.println("Connection: close");
+                        client.println();
+                        client.println("ERROR: Could not parse firmware binary from upload. Make sure you are uploading a .bin file.");
+                        client.stop();
+                        continue;
+                    }
+                    Serial.println("Code written to flash partition.");
+                    // Update metadata: set new slot as valid and active, invalidate the other
+                    if (init_meta.active_slot == 0) {
+                        init_meta.valid_b = 1;
+                        init_meta.active_slot = 1;
+                        init_meta.valid_a = 0;
+                    } else {
+                        init_meta.valid_a = 1;
+                        init_meta.active_slot = 0;
+                        init_meta.valid_b = 0;
+                    }
+                    save_metadata(init_meta);
+                    Serial.println("Metadata updated. Rebooting to new application...");
+                    client.println("HTTP/1.1 200 OK");
+                    client.println("Content-Type: text/plain");
+                    client.println("Connection: close");
+                    client.println();
+                    client.println("Upload received. Code written to partition. Rebooting...");
+                    client.stop();
+                    delay(100);
+                    SCB_AIRCR = 0x05FA0004;
+                    while (1);
+                } else if (req_line.startsWith("GET / ") || req_line.startsWith("GET /HTTP")) {
+                    // Serve upload form for GET /
                     client.println("HTTP/1.1 200 OK");
                     client.println("Content-Type: text/html");
                     client.println("Connection: close");
                     client.println();
                     client.println("<html><head><title>S3BL Recovery</title></head><body>");
                     client.println("<h2>S3BL Recovery Mode</h2>");
+                    client.println("<h2>Upload Compiled Firmware (.bin)</h2>");
+                    client.println("<p style='color:red'><b>NOTE:</b> Only compiled binary files (.bin) generated for Teensy 4.0 are supported. Do NOT upload C++ source code. The file must start with a valid ARM Cortex-M7 vector table.</p>");
+                    client.println("<form method='POST' action='/upload' enctype='multipart/form-data'>");
+                    client.println("<input type='file' name='firmware' accept='.bin'><br><br>");
+                    client.println("<input type='submit' value='Upload Firmware'>");
+                    client.println("</form>");
+                    client.println("<hr>");
+                    client.println("<h3>Advanced: Upload Raw Code (NOT SUPPORTED)</h3>");
+                    client.println("<p style='color:orange'>Uploading C++ code as text will NOT work. Only compiled .bin files are supported.</p>");
                     client.println("<form method='POST' action='/upload' enctype='text/plain'>");
-                    client.println("<label>Paste code or upload .cpp file:</label><br>");
                     client.println("<textarea name='code' rows='16' cols='60'></textarea><br>");
-                    client.println("<input type='file' name='file' accept='.cpp'><br>");
-                    client.println("<input type='submit' value='Upload & Boot'>");
+                    client.println("<input type='submit' value='Upload Code (Not Supported)'>");
                     client.println("</form>");
                     client.println("</body></html>");
                     client.stop();
                     continue;
+                } else {
+                    // Fallback: print request
+                    Serial.println("--- Received HTTP data ---");
+                    Serial.println(req_line);
+                    Serial.println("--------------------------");
+                    client.println("HTTP/1.1 200 OK");
+                    client.println("Content-Type: text/plain");
+                    client.println("Connection: close");
+                    client.println();
+                    client.println("S3BL Recovery Mode: Data received. Check serial for content.");
+                    client.stop();
                 }
-                // Fallback: print request
-                Serial.println("--- Received HTTP data ---");
-                Serial.println(request);
-                Serial.println("--------------------------");
-                client.println("HTTP/1.1 200 OK");
-                client.println("Content-Type: text/plain");
-                client.println("Connection: close");
-                client.println();
-                client.println("S3BL Recovery Mode: Data received. Check serial for content.");
-                client.stop();
             }
             delay(10);
         }

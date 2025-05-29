@@ -1,0 +1,3 @@
+[submodule "include/include/LittleFS"]
+	path = include/include/LittleFS
+	url = https://github.com/PaulStoffregen/LittleFS

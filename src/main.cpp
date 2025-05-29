@@ -236,11 +236,9 @@ void setup() {
         IPAddress ip(192, 168, 1, 222);
         IPAddress gateway(192, 168, 1, 1);
         IPAddress subnet(255, 255, 255, 0);
-        // Ethernet.begin(mac, ip, gateway, subnet);
         Ethernet.begin(mac);
         Serial.print("Ethernet started. IP address: ");
         Serial.println(Ethernet.localIP());
-        // Start a simple HTTP server for recovery
         EthernetServer server(80);
         server.begin();
         Serial.println("Recovery HTTP server started on port 80");
@@ -254,13 +252,71 @@ void setup() {
                     while (client.available()) {
                         char c = client.read();
                         request += c;
-                        timeout = millis() + 1000; // reset timeout on activity
+                        timeout = millis() + 1000;
                     }
                 }
+                // Check for file upload POST
+                if (request.indexOf("POST /upload") >= 0) {
+                    int bodyStart = request.indexOf("\r\n\r\n");
+                    if (bodyStart > 0) {
+                        String code = request.substring(bodyStart + 4);
+                        Serial.println("--- Received uploaded code ---");
+                        Serial.println(code);
+                        Serial.println("-----------------------------");
+                        // Write to non-primary partition (slot B if active is A, else slot A)
+                        uint32_t target_addr = (init_meta.active_slot == 0) ? SLOT_B_ADDRESS : SLOT_A_ADDRESS;
+                        Serial.print("Writing uploaded code to partition at address 0x");
+                        Serial.println(target_addr, HEX);
+                        // Simulate writing code as binary to the partition (in real use, would parse and flash binary)
+                        flash_erase_sector(target_addr);
+                        flash_write(target_addr, code.c_str(), code.length());
+                        Serial.println("Code written to flash partition.");
+                        // Update metadata: set new slot as valid and active, invalidate the other
+                        if (init_meta.active_slot == 0) {
+                            init_meta.valid_b = 1;
+                            init_meta.active_slot = 1;
+                            init_meta.valid_a = 0; // Optionally invalidate A
+                        } else {
+                            init_meta.valid_a = 1;
+                            init_meta.active_slot = 0;
+                            init_meta.valid_b = 0; // Optionally invalidate B
+                        }
+                        save_metadata(init_meta);
+                        Serial.println("Metadata updated. Rebooting to new application...");
+                        // Respond to client
+                        client.println("HTTP/1.1 200 OK");
+                        client.println("Content-Type: text/plain");
+                        client.println("Connection: close");
+                        client.println();
+                        client.println("Upload received. Code written to partition. Rebooting...");
+                        client.stop();
+                        delay(100);
+                        SCB_AIRCR = 0x05FA0004; // Request system reset (ARM Cortex-M7)
+                        while (1); // Wait for reset
+                    }
+                }
+                // Serve upload form for GET /
+                if (request.startsWith("GET / ") || request.startsWith("GET /HTTP")) {
+                    client.println("HTTP/1.1 200 OK");
+                    client.println("Content-Type: text/html");
+                    client.println("Connection: close");
+                    client.println();
+                    client.println("<html><head><title>S3BL Recovery</title></head><body>");
+                    client.println("<h2>S3BL Recovery Mode</h2>");
+                    client.println("<form method='POST' action='/upload' enctype='text/plain'>");
+                    client.println("<label>Paste code or upload .cpp file:</label><br>");
+                    client.println("<textarea name='code' rows='16' cols='60'></textarea><br>");
+                    client.println("<input type='file' name='file' accept='.cpp'><br>");
+                    client.println("<input type='submit' value='Upload & Boot'>");
+                    client.println("</form>");
+                    client.println("</body></html>");
+                    client.stop();
+                    continue;
+                }
+                // Fallback: print request
                 Serial.println("--- Received HTTP data ---");
                 Serial.println(request);
                 Serial.println("--------------------------");
-                // Respond with a simple message
                 client.println("HTTP/1.1 200 OK");
                 client.println("Content-Type: text/plain");
                 client.println("Connection: close");

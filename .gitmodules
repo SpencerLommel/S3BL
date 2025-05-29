@@ -1,3 +1,6 @@
-[submodule "include/include/LittleFS"]
-	path = include/include/LittleFS
+[submodule "include/LittleFS"]
+	path = include/LittleFS
 	url = https://github.com/PaulStoffregen/LittleFS
+[submodule "include/Ethernet"]
+	path = include/Ethernet
+	url = https://github.com/PaulStoffregen/Ethernet
